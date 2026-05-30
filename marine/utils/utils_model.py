@@ -14,8 +14,10 @@ def load_model(model_name: str, model_path: str):
     if model_name == "llava-1.5-7b-hf":
         from transformers import AutoProcessor, LlavaForConditionalGeneration
 
-
-        model = LlavaForConditionalGeneration.from_pretrained(model_path).cuda()
+        model = LlavaForConditionalGeneration.from_pretrained(
+            model_path,
+            attn_implementation="eager"
+        ).cuda()
         processor = AutoProcessor.from_pretrained(model_path)
         tokenizer = processor.tokenizer
 

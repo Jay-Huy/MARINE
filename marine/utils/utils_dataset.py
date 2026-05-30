@@ -2,6 +2,7 @@ import os
 from typing import List, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from PIL import Image
@@ -44,6 +45,36 @@ class COCOEvalDataset(Dataset):
 
         image_path = os.path.join(self.image_dir, img_id)
         image = Image.open(image_path)
+        
+        # Load SAM mask
+        base_name = os.path.splitext(img_id)[0]
+        # Assume mask_dir is a sibling to image_dir: data/coco_images -> data/sam3_mask_arrays
+        mask_dir = os.path.join(os.path.dirname(self.image_dir), "sam3_mask_arrays")
+        mask_path = os.path.join(mask_dir, base_name, "masks.npy")
+        
+        if os.path.exists(mask_path):
+            import numpy as np
+            mask_arr = np.load(mask_path)
+            if len(mask_arr.shape) == 3:
+                mask_2d = np.max(mask_arr, axis=0)
+            else:
+                mask_2d = mask_arr
+            
+            mask_tensor = torch.from_numpy(mask_2d).unsqueeze(0).unsqueeze(0).float() # (1, 1, H, W)
+            
+            # 1. Mean Pooling về 24x24 (LLaVA-1.5 CLIP ViT-L/14 patch grid)
+            mask_24x24 = F.adaptive_avg_pool2d(mask_tensor, output_size=(24, 24))
+            
+            # 2. Threshold 0.5
+            mask_binary = (mask_24x24 >= 0.5).float()
+            
+            # 3. Dilation (Max Pooling 3x3 với stride=1, padding=1 để mở rộng biên)
+            mask_dilated = F.max_pool2d(mask_binary, kernel_size=3, stride=1, padding=1)
+            
+            sam_mask = mask_dilated.flatten() # (576,)
+        else:
+            # Fallback to all 1s if mask not found
+            sam_mask = torch.ones(576, dtype=torch.float32)
 
         qs = data["conversations"][0]["value"].replace("<image>", "").strip()
         qs_neg = data["conversations"][-1]["value"]
@@ -81,7 +112,8 @@ class COCOEvalDataset(Dataset):
             inputs["pixel_values"],
             guidance_inputs["pixel_values"],
             inputs["attention_mask"],
-            guidance_inputs["attention_mask"]
+            guidance_inputs["attention_mask"],
+            sam_mask
         )
 
 
@@ -94,7 +126,8 @@ def custom_collate_fn(batch: List[Tuple[
     torch.Tensor, # image_tensor
     torch.Tensor, # guidance_image_tensor
     torch.Tensor, # attention_mask
-    torch.Tensor  # guidance_attention_mask
+    torch.Tensor, # guidance_attention_mask
+    torch.Tensor  # sam_mask
 ]]) -> Tuple[torch.Tensor, ...]:
     """
     Custom collate function to pad input/guidance_ids and attention masks,
@@ -109,7 +142,8 @@ def custom_collate_fn(batch: List[Tuple[
         image_tensors,
         guidance_image_tensors,
         attention_masks_list,
-        guidance_attention_masks_list
+        guidance_attention_masks_list,
+        sam_masks_list
     ) = zip(*batch)
 
     def process_sequence(seq_list):
@@ -124,6 +158,8 @@ def custom_collate_fn(batch: List[Tuple[
 
     attn_mask_batch = process_sequence(attention_masks_list).cuda()
     guidance_attn_mask_batch = process_sequence(guidance_attention_masks_list).cuda()
+    
+    sam_mask_batch = torch.stack(sam_masks_list).cuda()
 
     return (
         list(prompts),
@@ -134,5 +170,6 @@ def custom_collate_fn(batch: List[Tuple[
         image_tensor_batch,
         guidance_image_tensor_batch,
         attn_mask_batch,
-        guidance_attn_mask_batch
+        guidance_attn_mask_batch,
+        sam_mask_batch
     )

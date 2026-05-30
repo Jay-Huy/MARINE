@@ -17,3 +17,20 @@ build/
 data/coco/
 *.cache/
 *.ckpt
+
+# Phase 6 Ignore Configs
+docs/
+output/verify/
+scripts/test_*
+modelling_llava.py
+data/coco_images/
+data/sam3_mask_arrays/
+
+# Extra ignores
+.agents/
+assets/sigmoid_test.png
+modeling_llava.py
+results/marine_eval_chair_*.json
+scripts/marine_modifications_demo.py
+scripts/verify_masks.py
+test.ipynb
