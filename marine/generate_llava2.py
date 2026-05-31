@@ -10,7 +10,7 @@ from transformers import LogitsProcessorList
 
 from marine.utils.utils import get_chunk, get_answers_file_name, get_model_name_from_path
 from marine.utils.utils_dataset import COCOEvalDataset, custom_collate_fn
-from marine.utils.utils_guidance import GuidanceLogits
+from marine.utils.utils_guidance import GuidanceLogits, AttentionCatcher, SinglePassSpatialPenalty
 
 class AttentionCatcher:
     def __init__(self):
@@ -93,17 +93,26 @@ def eval_model(args):
         with torch.inference_mode():
             if args.decode_approach == 1:
                 # Approach 1: Single Pass (Chỉ dùng Condition luồng với SAM Mask, không dùng CFG)
+                processor_obj = SinglePassSpatialPenalty(
+                    guidance=guidance_ids,
+                    sam_mask=custom_sam_attention_mask,
+                    model=model
+                )
                 output_ids = model.generate(
                     input_ids=guidance_ids, # Guidance_ids đã bao gồm cả Text Mồi và Prompt
                     pixel_values=guidance_images,
-                    attention_mask=custom_sam_attention_mask,
+                    attention_mask=guidance_attention_masks, # Standard text mask!
                     do_sample=args.sampling,
                     temperature=args.temperature,
                     top_p=args.top_p,
                     max_new_tokens=args.max_new_tokens,
                     use_cache=True,
-                    output_attentions=True
+                    output_attentions=True,
+                    logits_processor=LogitsProcessorList([
+                        processor_obj
+                    ])
                 )
+                processor_obj.clean_up()
                 input_token_len = guidance_ids.shape[1]
             elif args.decode_approach == 2:
                 # Approach 2: Double Pass (Dùng CFG với Dynamic Gamma dựa trên Entropy)

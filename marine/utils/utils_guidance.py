@@ -158,3 +158,67 @@ class GuidanceLogits(LogitsProcessor):
         out = torch.nan_to_num(out, nan=float('-inf'))
         
         return out
+
+
+class SinglePassSpatialPenalty(LogitsProcessor):
+    """
+    Lightweight processor for Approach 1. 
+    It only registers hooks to apply the spatial penalty (SAM mask) to the model's self-attention,
+    but does NOT perform any double-pass or CFG logic.
+    """
+    def __init__(self, guidance, sam_mask, model):
+        self.guidance = guidance.cuda()
+        self.sam_mask = sam_mask
+        self.model = model
+        
+        self.pre_hook_handles = []
+        
+        # Robustly find layers depending on model architecture
+        try:
+            layers = self.model.language_model.model.layers # HF Transformers
+        except AttributeError:
+            try:
+                layers = self.model.model.language_model.layers # User specified alternative
+            except AttributeError:
+                layers = self.model.model.layers # Original LLaVA repository
+                
+        for layer in layers:
+            handle = layer.self_attn.register_forward_pre_hook(self.pre_hook_fn, with_kwargs=True)
+            self.pre_hook_handles.append(handle)
+
+    def pre_hook_fn(self, module, args, kwargs):
+        if self.sam_mask is None:
+            return args, kwargs
+            
+        attention_mask = kwargs.get('attention_mask', None)
+        if attention_mask is not None:
+            kv_len = attention_mask.shape[-1]
+            idx_200 = (self.guidance[0] == -200).nonzero(as_tuple=True)[0]
+            if len(idx_200) > 0:
+                image_idx = idx_200[0].item()
+            else:
+                image_token_id = getattr(self.model.config, 'image_token_index', 32000)
+                idx_img = (self.guidance[0] == image_token_id).nonzero(as_tuple=True)[0]
+                if len(idx_img) > 0:
+                    image_idx = idx_img[0].item()
+                else:
+                    image_idx = 1 if self.guidance[0][0].item() in [1, 2] else 0
+            
+            if kv_len >= image_idx + 576:
+                penalty_1d = torch.log(self.sam_mask + 1e-9) # (batch, 576)
+                
+                penalty = torch.zeros((self.sam_mask.shape[0], 1, 1, kv_len), device=attention_mask.device, dtype=attention_mask.dtype)
+                penalty[:, 0, 0, image_idx : image_idx + 576] = penalty_1d.to(penalty.dtype)
+                
+                kwargs['attention_mask'] = attention_mask + penalty
+                
+        return args, kwargs
+
+    def __call__(self, input_ids, logits):
+        # Do absolutely nothing to the logits. We just want the hook to run.
+        return logits
+
+    def clean_up(self):
+        for handle in self.pre_hook_handles:
+            handle.remove()
+        self.pre_hook_handles = []
