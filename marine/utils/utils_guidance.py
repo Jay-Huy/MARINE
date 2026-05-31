@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 class GuidanceLogits(LogitsProcessor):
 
-    def __init__(self, guidance, images, attention_mask, model, tokenizer=None, attention_catcher=None, tau=2.8, beta=3.0, sam_mask=None):
+    def __init__(self, guidance, images, attention_mask, model, tokenizer=None, attention_catcher=None, tau=2.8, beta=3.0, sam_mask=None, static_gamma=None):
         """
         Args:
             guidance (torch.Tensor): The guidance input tensor.
@@ -28,6 +28,7 @@ class GuidanceLogits(LogitsProcessor):
         self.tau = tau
         self.beta = beta
         self.gamma_scale = 1.0
+        self.static_gamma = static_gamma
         self.gamma_history = []
         
         # Register pre_hooks on all self_attn layers to apply Soft Spatial Penalty
@@ -136,7 +137,11 @@ class GuidanceLogits(LogitsProcessor):
             guidance_logits = guidance_logits.squeeze(1)
 
         # Tính Dynamic Gamma dựa trên Uncondition Attention thay vì dùng biến tĩnh
-        dynamic_gamma = self.get_dynamic_gamma()
+        if self.static_gamma is not None:
+            dynamic_gamma = self.static_gamma
+        else:
+            dynamic_gamma = self.get_dynamic_gamma()
+            
         self.gamma_history.append(dynamic_gamma)
 
         # Áp dụng theo lý thuyết MARINE: Khi gamma tiến tới 1 (H cao -> normal), ta tin tưởng logits (ảnh gốc).

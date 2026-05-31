@@ -105,7 +105,7 @@ def eval_model(args):
                     output_attentions=True
                 )
                 input_token_len = guidance_ids.shape[1]
-            else:
+            elif args.decode_approach == 2:
                 # Approach 2: Double Pass (Dùng CFG với Dynamic Gamma dựa trên Entropy)
                 processor_obj = GuidanceLogits(tau=args.tau,
                                   beta=args.beta,
@@ -115,7 +115,8 @@ def eval_model(args):
                                   sam_mask=custom_sam_attention_mask,      # Spatial Penalty Mask chứa 1.0 và alpha
                                   model=model,
                                   tokenizer=tokenizer,
-                                  attention_catcher=catcher) # Truyền catcher vào
+                                  attention_catcher=catcher,
+                                  static_gamma=args.static_gamma) # Truyền catcher vào
                                   
                 output_ids = model.generate(
                     input_ids=input_ids,
@@ -132,6 +133,19 @@ def eval_model(args):
                     ])
                 )
                 processor_obj.clean_up() # Xóa hooks sau khi sinh xong để tránh memory leak
+                input_token_len = input_ids.shape[1]
+            elif args.decode_approach == 0:
+                # Baseline: Không dùng bất kỳ can thiệp nào
+                output_ids = model.generate(
+                    input_ids=input_ids,
+                    pixel_values=images,
+                    attention_mask=attention_masks,
+                    do_sample=args.sampling,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    max_new_tokens=args.max_new_tokens,
+                    use_cache=True
+                )
                 input_token_len = input_ids.shape[1]
 
         # Batch decode the outputs
@@ -207,8 +221,9 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tau", type=float, default=2.8, help="Tau parameter for dynamic gamma")
     parser.add_argument("--beta", type=float, default=3.0, help="Beta parameter for dynamic gamma")
+    parser.add_argument("--static_gamma", type=float, default=None, help="Fixed gamma value for ablation. If set, overrides dynamic gamma.")
     parser.add_argument("--alpha", type=float, default=0.7, help="Attention score ratio for background spatial tokens")
-    parser.add_argument("--decode_approach", type=int, default=2, choices=[1, 2], help="1: Single Pass, 2: Double Pass")
+    parser.add_argument("--decode_approach", type=int, default=2, choices=[0, 1, 2], help="0: Baseline, 1: Single Pass, 2: Double Pass")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--test_samples", type=int, default=None, help="Limit number of samples for testing")
     parser.add_argument("--load_4bit", action="store_true", help="Load model in 4-bit quantization")

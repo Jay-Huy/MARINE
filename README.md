@@ -72,3 +72,57 @@ To run the full evaluation over the entire dataset, simply omit the `--test_samp
 ```
 
 **Results:** The final output will be saved as a standard `.json` file containing both metadata (model parameters, execution time) and the generated responses list.
+
+## Ablation Study Scripts
+
+These scripts are pre-configured to run different ablation studies to isolate the impact of various MARINE components.
+
+### Ablation 1: Masking Only (No CFG / No Dynamic Gamma)
+Demonstrates why Classifier-Free Guidance Theory is necessary by forcing the model to generate directly from the masked image.
+```bash
+!PYTHONPATH=/content/LLaVA python -m marine.generate_llava2 \
+    --model_path llava-hf/llava-1.5-7b-hf \
+    --question_path ./data/marine_qa/question \
+    --question_file chair_coco_detr_th0.95_ram_th0.68.json \
+    --image_folder /content/drive/MyDrive/AI-Algorithm/Final-Project/data/coco_images \
+    --answer_path ./output \
+    --answers_file ablation_mask_only.json \
+    --decode_approach 1 \
+    --batch_size 2 \
+    --load_4bit
+```
+
+### Ablation 2: Static Gamma (No Dynamic Entropy)
+Fixes the gamma parameter to a static value (0.7) to prove that dynamically shifting gamma based on entropy yields better contextual fluency.
+```bash
+!PYTHONPATH=/content/LLaVA python -m marine.generate_llava2 \
+    --model_path llava-hf/llava-1.5-7b-hf \
+    --question_path ./data/marine_qa/question \
+    --question_file chair_coco_detr_th0.95_ram_th0.68.json \
+    --image_folder /content/drive/MyDrive/AI-Algorithm/Final-Project/data/coco_images \
+    --answer_path ./output \
+    --answers_file ablation_static_gamma0.7.json \
+    --decode_approach 2 \
+    --static_gamma 0.7 \
+    --alpha 0.7 \
+    --batch_size 2 \
+    --load_4bit
+```
+
+### Ablation 3: Hard Spatial Mask (Alpha = 0.0)
+Completely removes the general background (objects are blacked out) instead of softly dimming it.
+```bash
+!PYTHONPATH=/content/LLaVA python -m marine.generate_llava2 \
+    --model_path llava-hf/llava-1.5-7b-hf \
+    --question_path ./data/marine_qa/question \
+    --question_file chair_coco_detr_th0.95_ram_th0.68.json \
+    --image_folder /content/drive/MyDrive/AI-Algorithm/Final-Project/data/coco_images \
+    --answer_path ./output \
+    --answers_file ablation_hard_mask_alpha0.0.json \
+    --decode_approach 2 \
+    --alpha 0.0 \
+    --tau 2.8 \
+    --beta 3.0 \
+    --batch_size 2 \
+    --load_4bit
+```
