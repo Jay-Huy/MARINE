@@ -29,12 +29,21 @@ def eval_model(args):
     model_path = args.model_path
     model_name = get_model_name_from_path(model_path)
     
-    model, tokenizer, processor = load_model(model_name, model_path)
+    model, tokenizer, processor = load_model(model_name, model_path, args.load_4bit)
 
     # Đăng ký Hook vào Layer cuối cùng của Uncondition model để hứng Attention tính Entropy
     catcher = AttentionCatcher()
-    # LLaVA 1.5 dùng kiến trúc LLaMA, layer cuối là model.model.layers[-1].self_attn
-    hook_handle = model.model.layers[-1].self_attn.register_forward_hook(catcher.hook_fn)
+    
+    # Robustly find layers depending on model architecture
+    try:
+        layers = model.language_model.model.layers # HF Transformers
+    except AttributeError:
+        try:
+            layers = model.model.language_model.layers # User specified alternative
+        except AttributeError:
+            layers = model.model.layers # Original LLaVA repository
+            
+    hook_handle = layers[-1].self_attn.register_forward_hook(catcher.hook_fn)
 
     # QA Data
     questions = json.load(open(os.path.expanduser(
@@ -189,6 +198,7 @@ if __name__ == "__main__":
     parser.add_argument("--decode_approach", type=int, default=2, choices=[1, 2], help="1: Single Pass, 2: Double Pass")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--test_samples", type=int, default=None, help="Limit number of samples for testing")
+    parser.add_argument("--load_4bit", action="store_true", help="Load model in 4-bit quantization")
     parser.add_argument("--sampling", action="store_true")
     args = parser.parse_args()
 

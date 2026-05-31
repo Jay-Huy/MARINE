@@ -4,17 +4,18 @@ import torch.nn.functional as F
 
 class GuidanceLogits(LogitsProcessor):
 
-    def __init__(self, guidance_strength, guidance, images, attention_mask, model, tokenizer=None, attention_catcher=None):
+    def __init__(self, guidance, images, attention_mask, model, tokenizer=None, attention_catcher=None, tau=2.8, beta=3.0, sam_mask=None):
         """
         Args:
-            guidance_strength (float): The guidance strength for the logits.
             guidance (torch.Tensor): The guidance input tensor.
             images (torch.Tensor): The images tensor.
             attention_mask (torch.Tensor): The attention mask tensor.
             model (torch.nn.Module): The model to use.
             attention_catcher (AttentionCatcher): Hook để lấy Uncondition Attention.
+            tau (float): Tau parameter for entropy mapping
+            beta (float): Beta parameter for entropy mapping
+            sam_mask (torch.Tensor): Mask tensor containing 1.0 and alpha
         """
-        self.guidance_strength = guidance_strength
         self.guidance = guidance.cuda()
         self.images = images
         self.attention_mask = attention_mask
@@ -22,15 +23,25 @@ class GuidanceLogits(LogitsProcessor):
         self.out = None
         self.tokenizer = tokenizer
         self.attention_catcher = attention_catcher
-        self.sam_mask = kwargs.get('sam_mask', None)
+        self.sam_mask = sam_mask
         self.is_uncond_pass = False
-        self.tau = kwargs.get('tau', 2.8)
-        self.beta = kwargs.get('beta', 3.0)
+        self.tau = tau
+        self.beta = beta
         self.gamma_scale = 1.0
         
         # Register pre_hooks on all self_attn layers to apply Soft Spatial Penalty
         self.pre_hook_handles = []
-        for layer in self.model.language_model.model.layers:
+        
+        # Robustly find layers depending on model architecture
+        try:
+            layers = self.model.language_model.model.layers # HF Transformers
+        except AttributeError:
+            try:
+                layers = self.model.model.language_model.layers # User specified alternative
+            except AttributeError:
+                layers = self.model.model.layers # Original LLaVA repository
+                
+        for layer in layers:
             handle = layer.self_attn.register_forward_pre_hook(self.pre_hook_fn, with_kwargs=True)
             self.pre_hook_handles.append(handle)
         
@@ -41,7 +52,16 @@ class GuidanceLogits(LogitsProcessor):
         attention_mask = kwargs.get('attention_mask', None)
         if attention_mask is not None:
             kv_len = attention_mask.shape[-1]
-            image_idx = (self.guidance[0] == -200).nonzero(as_tuple=True)[0].item()
+            idx_200 = (self.guidance[0] == -200).nonzero(as_tuple=True)[0]
+            if len(idx_200) > 0:
+                image_idx = idx_200[0].item()
+            else:
+                image_token_id = getattr(self.model.config, 'image_token_index', 32000)
+                idx_img = (self.guidance[0] == image_token_id).nonzero(as_tuple=True)[0]
+                if len(idx_img) > 0:
+                    image_idx = idx_img[0].item()
+                else:
+                    image_idx = 1 if self.guidance[0][0].item() in [1, 2] else 0
             
             if kv_len >= image_idx + 576:
                 # self.sam_mask chứa giá trị 1.0 (foreground) và alpha (background).
@@ -95,9 +115,14 @@ class GuidanceLogits(LogitsProcessor):
                                   use_cache=True,
                                   output_attentions=True)
         else:
+            if self.attention_mask is not None:
+                self.attention_mask = torch.cat(
+                    [self.attention_mask, torch.ones((self.attention_mask.shape[0], 1), dtype=self.attention_mask.dtype, device=self.attention_mask.device)],
+                    dim=1
+                )
             self.out = self.model(input_ids[:, -1:],
                                   use_cache=True,
-                                  attention_mask=self.attention_mask, # Giữ nguyên mask cho các step sau
+                                  attention_mask=self.attention_mask,
                                   past_key_values=self.out.past_key_values,
                                   output_attentions=True)
                                   
@@ -112,7 +137,8 @@ class GuidanceLogits(LogitsProcessor):
         # Tính Dynamic Gamma dựa trên Uncondition Attention thay vì dùng biến tĩnh
         dynamic_gamma = self.get_dynamic_gamma()
 
-        out = dynamic_gamma * (guidance_logits - logits) + logits
-        out = F.log_softmax(out, dim=-1)
-
+        # Áp dụng theo lý thuyết MARINE: L_CFG = gamma * L_cond + (1 - gamma) * L_uncond
+        # Trong đó: guidance_logits (có mask) là L_cond, logits (không mask) là L_uncond
+        out = dynamic_gamma * guidance_logits + (1.0 - dynamic_gamma) * logits
+        
         return out

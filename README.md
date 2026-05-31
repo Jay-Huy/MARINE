@@ -36,17 +36,19 @@ Before running the evaluation on Colab or Kaggle, you **must** place your image 
 You can run a quick test using the `--test_samples` flag to limit execution to 10 samples. This is highly recommended before a full execution run.
 
 ```bash
-python -m marine.generate_llava2 \
+!PYTHONPATH=/content/LLaVA python -m marine.generate_llava2 \
     --model_path llava-hf/llava-1.5-7b-hf \
     --question_path ./data/marine_qa/question \
     --question_file chair_coco_detr_th0.95_ram_th0.68.json \
-    --image_folder ./data/coco_images \
+    --image_folder /content/drive/MyDrive/AI-Algorithm/Final-Project/data/coco_images \
     --answer_path ./output \
     --answers_file marine_eval_chair_alpha0.7.json \
     --decode_approach 2 \
     --alpha 0.7 \
     --tau 2.8 \
     --beta 3.0 \
+    --batch_size 2 \
+    --load_4bit \
     --test_samples 10
 ```
 
@@ -54,17 +56,19 @@ python -m marine.generate_llava2 \
 To run the full evaluation over the entire dataset, simply omit the `--test_samples` flag. The script will output total processed samples and execution time at the end.
 
 ```bash
-python -m marine.generate_llava2 \
+!PYTHONPATH=/content/LLaVA python -m marine.generate_llava2 \
     --model_path llava-hf/llava-1.5-7b-hf \
     --question_path ./data/marine_qa/question \
     --question_file chair_coco_detr_th0.95_ram_th0.68.json \
-    --image_folder ./data/coco_images \
+    --image_folder /content/drive/MyDrive/AI-Algorithm/Final-Project/data/coco_images \
     --answer_path ./output \
     --answers_file marine_eval_chair_alpha0.7.json \
     --decode_approach 2 \
     --alpha 0.7 \
     --tau 2.8 \
-    --beta 3.0
+    --beta 3.0 \
+    --batch_size 2 \
+    --load_4bit
 ```
 
 **Results:** The final output will be saved as a standard `.json` file containing both metadata (model parameters, execution time) and the generated responses list.
