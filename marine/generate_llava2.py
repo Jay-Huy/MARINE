@@ -10,7 +10,7 @@ from transformers import LogitsProcessorList
 
 from marine.utils.utils import get_chunk, get_answers_file_name, get_model_name_from_path
 from marine.utils.utils_dataset import COCOEvalDataset, custom_collate_fn
-from marine.utils.utils_guidance import GuidanceLogits, AttentionCatcher, SinglePassSpatialPenalty
+from marine.utils.utils_guidance import GuidanceLogits, SinglePassSpatialPenalty
 
 class AttentionCatcher:
     def __init__(self):
