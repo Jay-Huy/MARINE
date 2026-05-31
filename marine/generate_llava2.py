@@ -142,17 +142,30 @@ def eval_model(args):
 
             # Process each output
             output = output.strip()
-            print(f"{question_ids[i]}: {output}")
+            
+            gamma_info = ""
+            dynamic_gammas = []
+            if args.decode_approach == 2 and hasattr(processor_obj, 'gamma_history'):
+                dynamic_gammas = processor_obj.gamma_history
+                if len(dynamic_gammas) > 0:
+                    avg_gamma = sum(dynamic_gammas) / len(dynamic_gammas)
+                    gamma_info = f" | Avg Gamma: {avg_gamma:.4f} | Gamma History: {[round(g, 4) for g in dynamic_gammas]}"
+                    
+            print(f"{question_ids[i]}: {output}{gamma_info}")
 
             # Generate answer ID
             ans_id = shortuuid.uuid()
-            final_output["results"].append({
+            result_dict = {
                 "question_id": question_ids[i],
                 "image_id": img_ids[i],
                 "prompt": prompts[i],
                 "generated_text": output,
                 "answer_id": ans_id
-            })
+            }
+            if args.decode_approach == 2:
+                result_dict["dynamic_gammas"] = dynamic_gammas
+                
+            final_output["results"].append(result_dict)
 
     total_time = time.time() - start_time
     total_samples = len(final_output["results"])

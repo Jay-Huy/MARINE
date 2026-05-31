@@ -28,6 +28,7 @@ class GuidanceLogits(LogitsProcessor):
         self.tau = tau
         self.beta = beta
         self.gamma_scale = 1.0
+        self.gamma_history = []
         
         # Register pre_hooks on all self_attn layers to apply Soft Spatial Penalty
         self.pre_hook_handles = []
@@ -93,8 +94,8 @@ class GuidanceLogits(LogitsProcessor):
         uncond_attn = self.attention_catcher.attention
         # uncond_attn shape: (batch_size, num_heads, q_len, kv_len)
         # Tại mỗi bước sinh token, q_len = 1 (chỉ query cho token hiện tại)
-        # Ta lấy attention của batch 0, tính trung bình qua các heads
-        attention_weights = uncond_attn[0, :, -1, :] # (num_heads, kv_len)
+        # ÉP KIỂU SANG FLOAT32 để tránh lỗi 1e-9 bị làm tròn thành 0.0 trong float16 dẫn đến log(0) = -inf và 0 * -inf = NaN!
+        attention_weights = uncond_attn[0, :, -1, :].to(torch.float32) # (num_heads, kv_len)
         mean_attention = attention_weights.mean(dim=0)
         
         # Tính Entropy
@@ -105,7 +106,7 @@ class GuidanceLogits(LogitsProcessor):
         return gamma.item()
 
     def __call__(self, input_ids, logits):
-        logits = F.log_softmax(logits, dim=-1)
+        # logits là RAW logits từ mô hình chuẩn (Condition Pass)
         self.is_uncond_pass = True # Bật cờ để kích hoạt Soft Spatial Penalty
         
         if self.out is None:
@@ -129,16 +130,26 @@ class GuidanceLogits(LogitsProcessor):
         self.is_uncond_pass = False # Tắt cờ
 
         if len(self.out.logits) == 1:
-            guidance_logits = F.log_softmax(self.out.logits[0][-1:], dim=-1)
+            guidance_logits = self.out.logits[0][-1:]
         else:
-            guidance_logits = F.log_softmax(self.out.logits[:,-1:], dim=-1).to(logits.device)
+            guidance_logits = self.out.logits[:,-1:].to(logits.device)
             guidance_logits = guidance_logits.squeeze(1)
 
         # Tính Dynamic Gamma dựa trên Uncondition Attention thay vì dùng biến tĩnh
         dynamic_gamma = self.get_dynamic_gamma()
+        self.gamma_history.append(dynamic_gamma)
 
-        # Áp dụng theo lý thuyết MARINE: L_CFG = gamma * L_cond + (1 - gamma) * L_uncond
-        # Trong đó: guidance_logits (có mask) là L_cond, logits (không mask) là L_uncond
-        out = dynamic_gamma * guidance_logits + (1.0 - dynamic_gamma) * logits
+        # Áp dụng theo lý thuyết MARINE: Khi gamma tiến tới 1 (H cao -> normal), ta tin tưởng logits (ảnh gốc).
+        # Khi gamma tiến tới 0 (H thấp -> hallucinating), ta tin tưởng guidance_logits (ảnh bị che, không chứa vật thể).
+        out = dynamic_gamma * logits + (1.0 - dynamic_gamma) * guidance_logits
+        
+        # Sửa lỗi chí mạng: Nếu dynamic_gamma == 0.0 và logits có token bị chặn (-inf), 0.0 * -inf sẽ ra NaN!
+        # Tương tự nếu 1.0 - dynamic_gamma == 0.0 và guidance_logits chứa -inf.
+        # Ta cần gán lại -inf cho những vị trí này để duy trì việc chặn token và tránh argmax bị sụp đổ về 0 (<unk>).
+        out[logits == float('-inf')] = float('-inf')
+        out[guidance_logits == float('-inf')] = float('-inf')
+        
+        # Đề phòng bất cứ giá trị NaN nào khác làm hỏng hàm argmax
+        out = torch.nan_to_num(out, nan=float('-inf'))
         
         return out
